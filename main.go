@@ -11,23 +11,36 @@ var (
 	listenAddr   = flag.String("listen", ":7878", "listen op given port")
 	upstreamAddr = flag.String("upstream", "127.0.0.1:7879",
 		"proxy to given upstream address")
-	rate             = flag.Float64("rate", 100000, "limit to given bytes/sec")
-	lastSecond       int64
-	passedLastSecond uint64
-	addr             net.Addr
+	rate       = flag.Float64("rate", 100000, "limit to given bytes/sec")
+	lastSecond int64
+	dataUp     uint64
+	dataDown   uint64
+	addr       net.Addr
 )
 
-func allow(amount uint64) bool {
+func allow(amount uint64, up bool) bool {
 	now := time.Now().UnixNano()
 	secondNow := now / 1000000000
 	if secondNow != lastSecond {
-		passedLastSecond = 0
+		dataUp = 0
+		dataDown = 0
 		lastSecond = secondNow
+	} else {
+		var data uint64
+		if up {
+			data = dataUp
+		} else {
+			data = dataDown
+		}
+		if *rate < float64(data)/(float64(now%1000000000)/1000000000) {
+			return false
+		}
 	}
-	if *rate < float64(passedLastSecond)/(float64(now%1000000000)/1000000000) {
-		return false
+	if up {
+		dataUp += amount
+	} else {
+		dataDown += amount
 	}
-	passedLastSecond += amount
 	return true
 }
 
@@ -46,7 +59,7 @@ func main() {
 		buf := make([]byte, 1500)
 		for {
 			n, addr2, err := ls.ReadFrom(buf[:])
-			if !allow(uint64(n)) {
+			if !allow(uint64(n), true) {
 				continue
 			}
 			addr = addr2
@@ -66,7 +79,7 @@ func main() {
 			log.Printf("Don't know where to send this packet to ...")
 			continue
 		}
-		if !allow(uint64(n)) {
+		if !allow(uint64(n), false) {
 			continue
 		}
 		_, err2 := ls.WriteTo(buf[:n], addr)
